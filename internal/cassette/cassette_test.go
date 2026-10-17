@@ -26,6 +26,23 @@ func TestStoreSavesAndLoads(t *testing.T) {
 	}
 }
 
+func TestOpenStore(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing.json")
+	if _, err := OpenStore(path, true); err == nil {
+		t.Error("a missing file should be an error when mustExist is true")
+	}
+	s, err := OpenStore(path, false)
+	if err != nil || len(s.Interactions()) != 0 {
+		t.Errorf("a missing file should give an empty store, got %v", err)
+	}
+
+	s.Add(Interaction{Request: Request{Method: "GET", Path: "/x"}})
+	s, err = OpenStore(path, true)
+	if err != nil || len(s.Interactions()) != 1 {
+		t.Errorf("reopened store: %v, %d interactions", err, len(s.Interactions()))
+	}
+}
+
 func TestCleanHeadersRemovesSecrets(t *testing.T) {
 	h := http.Header{}
 	h.Set("X-Api-Key", "sk-secret")

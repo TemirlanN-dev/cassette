@@ -118,6 +118,11 @@ func (m *Matcher) normalize(body []byte) []byte {
 		// Not JSON: compare it as plain text.
 		return []byte(m.replaceText(string(body)))
 	}
+	if s, ok := v.(string); ok {
+		// The cassette stores non-JSON bodies as a JSON string, so treat a string
+		// the same as plain text; otherwise recordings and live requests wouldn't match.
+		return []byte(m.replaceText(s))
+	}
 	for _, segments := range m.ignore {
 		removePath(v, segments)
 	}

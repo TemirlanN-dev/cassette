@@ -3,7 +3,9 @@ package cassette
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -133,12 +135,41 @@ type Store struct {
 	c    Cassette
 }
 
-// NewStore starts an empty cassette at path. The file is replaced on the first Add.
+// NewStore starts an empty cassette at path. Nothing is written until Save or Add.
 func NewStore(path string) *Store {
 	return &Store{path: path, c: Cassette{Version: FormatVersion, Interactions: []Interaction{}}}
 }
 
+// OpenStore loads the cassette at path. If the file doesn't exist, it returns
+// an error when mustExist is true and an empty store otherwise.
+func OpenStore(path string, mustExist bool) (*Store, error) {
+	c, err := Load(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		if mustExist {
+			return nil, fmt.Errorf("%s not found; record it first with `cassette auto` or `cassette record`", path)
+		}
+		return NewStore(path), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &Store{path: path, c: *c}, nil
+}
+
 func (s *Store) Path() string { return s.path }
+
+// Interactions returns a copy of the list, so callers can't change it behind the lock's back.
+func (s *Store) Interactions() []Interaction {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]Interaction(nil), s.c.Interactions...)
+}
+
+func (s *Store) Save() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.c.Save(s.path)
+}
 
 func (s *Store) Add(i Interaction) error {
 	s.mu.Lock()
