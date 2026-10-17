@@ -2,7 +2,10 @@ module github.com/TemirlanN-dev/cassette
 
 go 1.27.0
 
-require github.com/spf13/cobra v1.9.1
+require (
+	github.com/spf13/cobra v1.9.1
+	gopkg.in/yaml.v3 v3.0.1
+)
 
 require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
