@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -55,6 +56,7 @@ var secretHeaders = []string{
 	"Authorization",
 	"X-Api-Key",
 	"Api-Key",
+	"X-Goog-Api-Key",
 	"Openai-Organization",
 	"Openai-Project",
 	"Cookie",
@@ -80,6 +82,23 @@ func CleanHeaders(h http.Header) http.Header {
 		c.Del(k)
 	}
 	return c
+}
+
+// Query parameters that carry API keys, e.g. Gemini's ?key=...
+var secretParams = []string{"key", "api_key"}
+
+// CleanPath returns the path and query of u without secret query parameters.
+// It is used both for saving and for matching, so people with different keys
+// still match each other's recordings.
+func CleanPath(u *url.URL) string {
+	q := u.Query()
+	for _, k := range secretParams {
+		q.Del(k)
+	}
+	if len(q) == 0 {
+		return u.EscapedPath()
+	}
+	return u.EscapedPath() + "?" + q.Encode()
 }
 
 // EncodeBody stores a JSON body as real JSON, so it stays readable in git diffs,

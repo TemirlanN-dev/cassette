@@ -2,6 +2,7 @@ package cassette
 
 import (
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"testing"
 )
@@ -47,11 +48,12 @@ func TestCleanHeadersRemovesSecrets(t *testing.T) {
 	h := http.Header{}
 	h.Set("X-Api-Key", "sk-secret")
 	h.Set("Authorization", "Bearer sk-secret")
+	h.Set("X-Goog-Api-Key", "AIza-secret")
 	h.Set("Content-Length", "42")
 	h.Set("Content-Type", "application/json")
 
 	c := CleanHeaders(h)
-	for _, k := range []string{"X-Api-Key", "Authorization", "Content-Length"} {
+	for _, k := range []string{"X-Api-Key", "Authorization", "X-Goog-Api-Key", "Content-Length"} {
 		if c.Get(k) != "" {
 			t.Errorf("%s was kept", k)
 		}
@@ -61,6 +63,21 @@ func TestCleanHeadersRemovesSecrets(t *testing.T) {
 	}
 	if h.Get("X-Api-Key") == "" {
 		t.Error("CleanHeaders modified the original headers")
+	}
+}
+
+func TestCleanPathRemovesKeyParams(t *testing.T) {
+	cases := map[string]string{
+		"/v1/messages": "/v1/messages",
+		"/v1beta/models/m:generate?key=AIza-secret":  "/v1beta/models/m:generate",
+		"/v1beta/models/m:stream?alt=sse&key=AIza-x": "/v1beta/models/m:stream?alt=sse",
+		"/x?api_key=secret&beta=true":                "/x?beta=true",
+	}
+	for in, want := range cases {
+		u, _ := url.Parse(in)
+		if got := CleanPath(u); got != want {
+			t.Errorf("CleanPath(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

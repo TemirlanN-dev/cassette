@@ -232,7 +232,38 @@ func TestRecordSavesRepeatedRequestOnce(t *testing.T) {
 	}
 }
 
+func TestKeyInURLIsForwardedButNotSaved(t *testing.T) {
+	api := newFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("key") != "AIza-secret" {
+			t.Error("the real API must still receive the key in the URL")
+		}
+		jsonReply(`{"ok":true}`)(w, r)
+	})
+	path := tempCassette(t)
+	base, _ := startProxy(t, Options{Mode: Record, Target: api.url, Store: cassette.NewStore(path)})
+	post(t, base+"/v1beta/models/m:generateContent?key=AIza-secret", `{}`)
+
+	if got := loadEventually(t, path, 1).Interactions[0].Request.Path; got != "/v1beta/models/m:generateContent" {
+		t.Errorf("saved path = %q; the key must not be saved", got)
+	}
+}
+
 // --- auto ---
+
+func TestAutoMatchesAcrossDifferentKeysInURL(t *testing.T) {
+	api := newFakeAPI(t, jsonReply(`{"ok":true}`))
+	path := tempCassette(t)
+	store, _ := cassette.OpenStore(path, false)
+	base, _ := startProxy(t, Options{Mode: Auto, Target: api.url, Store: store})
+
+	post(t, base+"/v1beta/models/m:generateContent?key=alice", `{}`)
+	loadEventually(t, path, 1)
+	post(t, base+"/v1beta/models/m:generateContent?key=bob", `{}`)
+
+	if n := api.calls.Load(); n != 1 {
+		t.Errorf("real API called %d times; requests differing only by key should match", n)
+	}
+}
 
 func TestAutoRecordsOnceThenReplays(t *testing.T) {
 	const reply = `{"content":"hello"}`

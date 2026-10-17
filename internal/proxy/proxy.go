@@ -119,7 +119,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
 
-	path := r.URL.RequestURI()
+	// The forwarded request keeps the full URL; only the saved and matched copy drops secrets.
+	path := cassette.CleanPath(r.URL)
 	fp := p.matcher.Fingerprint(r.Method, path, body)
 
 	if p.mode != Record {
