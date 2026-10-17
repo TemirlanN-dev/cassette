@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"time"
@@ -33,6 +34,21 @@ var (
 	realtime     bool
 )
 
+// version is set when building a release: go build -ldflags "-X main.version=0.1.0".
+var version = ""
+
+// currentVersion returns the release version, or the module version for
+// `go install ...@v0.1.0`, or "dev" for a local build.
+func currentVersion() string {
+	if version != "" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return strings.TrimPrefix(info.Main.Version, "v")
+	}
+	return "dev"
+}
+
 // exitCodeError makes cassette exit with a specific code, e.g. the test command's.
 type exitCodeError struct{ code int }
 
@@ -42,6 +58,7 @@ func main() {
 	root := &cobra.Command{
 		Use:           "cassette",
 		Short:         "Record and replay LLM API calls for fast, free, deterministic tests",
+		Version:       currentVersion(),
 		SilenceUsage:  true,
 		SilenceErrors: true, // errors are printed below, so a failing test command isn't reported twice
 	}

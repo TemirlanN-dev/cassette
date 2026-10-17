@@ -49,7 +49,7 @@ In one of our tests against Google's Gemini:
 
 ## Quick start
 
-**1. Install it** (you'll need [Go](https://go.dev/dl/)):
+**1. Install it.** Download the program for your computer from the [latest release](https://github.com/TemirlanN-dev/cassette/releases/latest), or, if you have [Go](https://go.dev/dl/):
 
 ```sh
 go install github.com/TemirlanN-dev/cassette@latest
