@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -145,6 +147,17 @@ func TestCommandEnvReplacesBaseURLs(t *testing.T) {
 		if !want[kv] {
 			t.Errorf("unexpected %q in %v", kv, env)
 		}
+	}
+}
+
+func TestCommandEnvDoesNotLogOldValue(t *testing.T) {
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	defer log.SetOutput(os.Stderr)
+
+	commandEnv([]string{"ANTHROPIC_BASE_URL=https://gateway.example.com/?token=secret"}, "http://127.0.0.1:5555", defaultEnvVars)
+	if strings.Contains(logs.String(), "secret") {
+		t.Errorf("the old value was logged: %s", logs.String())
 	}
 }
 

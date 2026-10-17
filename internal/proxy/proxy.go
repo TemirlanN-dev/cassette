@@ -5,8 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/TemirlanN-dev/cassette/internal/cassette"
-	"github.com/TemirlanN-dev/cassette/internal/match"
 	"io"
 	"log"
 	"mime"
@@ -15,6 +13,9 @@ import (
 	"net/url"
 	"sync"
 	"time"
+
+	"github.com/TemirlanN-dev/cassette/internal/cassette"
+	"github.com/TemirlanN-dev/cassette/internal/match"
 )
 
 type Mode int

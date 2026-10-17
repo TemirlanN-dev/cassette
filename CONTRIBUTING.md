@@ -30,7 +30,8 @@ If the tests pass, you're ready. They use a pretend AI service, so they never ca
 |---|---|
 | `main.go` | the `record`, `auto` and `replay` commands, and running your test command |
 | `internal/proxy/` | the part that sits between the app and the AI: records, replays, or fails |
-| `internal/match/` | how cassette decides two requests are "the same" (the `cassette.yaml` rules) |
+| `internal/match/` | how cassette decides two requests are "the same" (the matching rules) |
+| `internal/config/` | reading the `cassette.yaml` settings file |
 | `internal/cassette/` | the recording file: what's in it, how it's saved, and keeping keys out of it |
 
 ## Making a change

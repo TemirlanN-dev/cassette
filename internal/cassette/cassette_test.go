@@ -49,11 +49,12 @@ func TestCleanHeadersRemovesSecrets(t *testing.T) {
 	h.Set("X-Api-Key", "sk-secret")
 	h.Set("Authorization", "Bearer sk-secret")
 	h.Set("X-Goog-Api-Key", "AIza-secret")
+	h.Set("Anthropic-Organization-Id", "org-1234")
 	h.Set("Content-Length", "42")
 	h.Set("Content-Type", "application/json")
 
 	c := CleanHeaders(h)
-	for _, k := range []string{"X-Api-Key", "Authorization", "X-Goog-Api-Key", "Content-Length"} {
+	for _, k := range []string{"X-Api-Key", "Authorization", "X-Goog-Api-Key", "Anthropic-Organization-Id", "Content-Length"} {
 		if c.Get(k) != "" {
 			t.Errorf("%s was kept", k)
 		}

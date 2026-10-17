@@ -217,7 +217,7 @@ Recordings are plain, readable JSON, so when an AI answer changes you'll see exa
 Because `replay` never calls the AI, your CI doesn't need an API key at all. Here's a GitHub Actions example:
 
 ```yaml
-- uses: actions/setup-go@v5
+- uses: actions/setup-go@v7
   with:
     go-version: stable
 - run: go install github.com/TemirlanN-dev/cassette@latest

@@ -51,12 +51,14 @@ type Chunk struct {
 	Data     string `json:"data"`
 }
 
-// Secrets that must never be written to disk, since cassette files are committed to git.
+// Secrets and account identifiers that must never be written to disk, since
+// cassette files are committed to git.
 var secretHeaders = []string{
 	"Authorization",
 	"X-Api-Key",
 	"Api-Key",
 	"X-Goog-Api-Key",
+	"Anthropic-Organization-Id",
 	"Openai-Organization",
 	"Openai-Project",
 	"Cookie",

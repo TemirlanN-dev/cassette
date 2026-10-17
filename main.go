@@ -311,7 +311,9 @@ func commandEnv(environ []string, base string, vars []envVar) []string {
 		for _, v := range vars {
 			// Windows variable names ignore case, so compare that way everywhere.
 			if strings.EqualFold(name, v.name) {
-				log.Printf("replacing %s for the command (was %s)", v.name, strings.TrimPrefix(kv, name+"="))
+				// Don't print the old value: some gateway addresses contain a token,
+				// and CI logs are often public.
+				log.Printf("replacing %s for the command", v.name)
 				replaced = true
 			}
 		}
