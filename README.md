@@ -6,6 +6,7 @@
 
 Fast, free, and identical every time, so your tests stop waiting on the AI.
 
+[![tests](https://github.com/TemirlanN-dev/cassette/actions/workflows/test.yml/badge.svg)](https://github.com/TemirlanN-dev/cassette/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Made with Go](https://img.shields.io/badge/made%20with-Go-00ADD8.svg)](https://go.dev)
 
