@@ -8,17 +8,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io/fs"
-	"os"
 	"regexp"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
-// Config is the contents of cassette.yaml.
+// Config holds the matching rules from cassette.yaml.
 type Config struct {
 	// DefaultRules turns the built-in UUID, timestamp and date rules on or off.
 	// It is a pointer so a missing setting (nil) can mean "on".
@@ -40,24 +35,6 @@ var defaultReplacements = []Replacement{
 	{Pattern: `[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`, With: "<uuid>"},
 	{Pattern: `\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?`, With: "<timestamp>"},
 	{Pattern: `\d{4}-\d{2}-\d{2}`, With: "<date>"},
-}
-
-// LoadConfig reads cassette.yaml. A missing file is fine and means "use the defaults".
-func LoadConfig(path string) (Config, error) {
-	var cfg Config
-	data, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return cfg, nil
-	}
-	if err != nil {
-		return cfg, err
-	}
-	dec := yaml.NewDecoder(bytes.NewReader(data))
-	dec.KnownFields(true) // a typo like "ignroe:" is an error, not silently ignored
-	if err := dec.Decode(&cfg); err != nil {
-		return cfg, fmt.Errorf("%s: %w", path, err)
-	}
-	return cfg, nil
 }
 
 // Matcher computes fingerprints using a set of rules.

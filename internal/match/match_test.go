@@ -1,10 +1,6 @@
 package match
 
-import (
-	"os"
-	"path/filepath"
-	"testing"
-)
+import "testing"
 
 func mustNew(t *testing.T, cfg Config) *Matcher {
 	t.Helper()
@@ -121,36 +117,5 @@ func TestBadRules(t *testing.T) {
 	}
 	if _, err := New(Config{Ignore: []string{"metadata..id"}}); err == nil {
 		t.Error("empty path part should be an error")
-	}
-}
-
-func TestLoadConfig(t *testing.T) {
-	dir := t.TempDir()
-
-	cfg, err := LoadConfig(filepath.Join(dir, "missing.yaml"))
-	if err != nil || cfg.DefaultRules != nil || len(cfg.Ignore) != 0 {
-		t.Errorf("missing file should give an empty config, got %+v, %v", cfg, err)
-	}
-
-	path := filepath.Join(dir, "cassette.yaml")
-	os.WriteFile(path, []byte(`
-default_rules: false
-ignore:
-  - metadata.user_id
-replace:
-  - pattern: 'C:\\Users\\[^\\]+'
-    with: '<home>'
-`), 0o644)
-	cfg, err = LoadConfig(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.DefaultRules == nil || *cfg.DefaultRules || len(cfg.Ignore) != 1 || cfg.Replace[0].With != "<home>" {
-		t.Errorf("parsed %+v", cfg)
-	}
-
-	os.WriteFile(path, []byte("ignroe:\n  - x\n"), 0o644)
-	if _, err := LoadConfig(path); err == nil {
-		t.Error("a misspelled setting should be an error")
 	}
 }

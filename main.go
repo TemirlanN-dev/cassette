@@ -11,12 +11,14 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/TemirlanN-dev/cassette/internal/cassette"
+	"github.com/TemirlanN-dev/cassette/internal/config"
 	"github.com/TemirlanN-dev/cassette/internal/match"
 	"github.com/TemirlanN-dev/cassette/internal/proxy"
 )
@@ -27,6 +29,7 @@ var (
 	target       string
 	cassettePath string
 	configPath   string
+	envFlags     []string
 	realtime     bool
 )
 
@@ -46,7 +49,8 @@ func main() {
 	root.PersistentFlags().IntVar(&port, "port", 4000, "port to listen on (when running a command, a free port is picked unless you set this)")
 	root.PersistentFlags().StringVar(&target, "target", "", "API to forward requests to, e.g. https://api.anthropic.com (required for record and auto)")
 	root.PersistentFlags().StringVar(&cassettePath, "cassette", "cassettes/default.json", "cassette file to read and write")
-	root.PersistentFlags().StringVar(&configPath, "config", "cassette.yaml", "matching rules file (optional)")
+	root.PersistentFlags().StringVar(&configPath, "config", "cassette.yaml", "settings file (optional)")
+	root.PersistentFlags().StringArrayVar(&envFlags, "env", nil, "also point this environment variable at cassette for the command, e.g. --env MISTRAL_BASE_URL=/v1 (repeatable)")
 
 	root.AddCommand(
 		newCommand(proxy.Record, "record", "Forward every request to the real API and save the answers to a fresh cassette"),
@@ -78,7 +82,10 @@ the command's exit code:
 
   cassette ` + name + ` --target https://api.anthropic.com -- npm test
 
-Other SDKs need their base URL set to the address cassette prints.`,
+For other libraries, name the environment variable they read their
+address from, plus the path to keep:
+
+  cassette ` + name + ` --target https://api.mistral.ai --env MISTRAL_BASE_URL=/v1 -- npm test`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 && cmd.ArgsLenAtDash() != 0 {
 				return fmt.Errorf("put the command to run after --, e.g. cassette %s -- npm test", name)
@@ -95,13 +102,20 @@ Other SDKs need their base URL set to the address cassette prints.`,
 // run starts cassette in the given mode. If command is not empty, it runs the
 // command against cassette and stops when it exits; otherwise it runs until Ctrl+C.
 func run(mode proxy.Mode, command []string, portChosen bool) error {
-	cfg, err := match.LoadConfig(configPath)
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
 	}
-	matcher, err := match.New(cfg)
+	matcher, err := match.New(cfg.Match)
 	if err != nil {
 		return fmt.Errorf("%s: %w", configPath, err)
+	}
+	vars, err := envVars(cfg.Env, envFlags)
+	if err != nil {
+		return err
+	}
+	if len(command) == 0 && len(vars) > len(defaultEnvVars) {
+		log.Printf("note: env settings only apply when cassette runs a command after --")
 	}
 
 	var targetURL *url.URL
@@ -157,7 +171,7 @@ func run(mode proxy.Mode, command []string, portChosen bool) error {
 
 	var cmdErr error
 	if len(command) > 0 {
-		cmdErr = runCommand(command, base)
+		cmdErr = runCommand(command, base, vars)
 	} else {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		log.Printf("press Ctrl+C to stop")
@@ -187,18 +201,69 @@ func run(mode proxy.Mode, command []string, portChosen bool) error {
 	return nil
 }
 
+// envVar is an environment variable that gets set to cassette's address plus path.
+type envVar struct{ name, path string }
+
 // Environment variables the official SDKs read their base URL from.
-var baseURLVars = []struct{ name, suffix string }{
+var defaultEnvVars = []envVar{
 	{"ANTHROPIC_BASE_URL", ""},
 	{"OPENAI_BASE_URL", "/v1"}, // the OpenAI SDK expects /v1 to be part of the base URL
 }
 
+// envVars combines the built-in variables with those from cassette.yaml and
+// --env flags. For the same name, --env beats cassette.yaml beats built-in.
+func envVars(fromFile map[string]string, flags []string) ([]envVar, error) {
+	paths := map[string]string{}
+	names := []string{}
+	set := func(name, path string) error {
+		if name == "" || strings.ContainsAny(name, " =") {
+			return fmt.Errorf("invalid environment variable name %q", name)
+		}
+		if path != "" && !strings.HasPrefix(path, "/") {
+			path = "/" + path
+		}
+		// Windows variable names ignore case, so treat them that way everywhere.
+		key := strings.ToUpper(name)
+		if _, seen := paths[key]; !seen {
+			names = append(names, name)
+		}
+		paths[key] = path
+		return nil
+	}
+
+	for _, v := range defaultEnvVars {
+		set(v.name, v.path)
+	}
+	fileNames := make([]string, 0, len(fromFile))
+	for name := range fromFile {
+		fileNames = append(fileNames, name)
+	}
+	sort.Strings(fileNames) // map order is random; keep the log output stable
+	for _, name := range fileNames {
+		if err := set(name, fromFile[name]); err != nil {
+			return nil, fmt.Errorf("cassette.yaml env: %w", err)
+		}
+	}
+	for _, f := range flags {
+		name, path, _ := strings.Cut(f, "=")
+		if err := set(name, path); err != nil {
+			return nil, fmt.Errorf("--env %s: %w", f, err)
+		}
+	}
+
+	vars := make([]envVar, 0, len(names))
+	for _, name := range names {
+		vars = append(vars, envVar{name, paths[strings.ToUpper(name)]})
+	}
+	return vars, nil
+}
+
 // runCommand runs the user's command with the SDKs pointed at cassette and
 // returns an exitCodeError if the command fails.
-func runCommand(command []string, base string) error {
+func runCommand(command []string, base string, vars []envVar) error {
 	c := exec.Command(command[0], command[1:]...)
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
-	c.Env = commandEnv(os.Environ(), base)
+	c.Env = commandEnv(os.Environ(), base, vars)
 
 	// Ctrl+C reaches the command directly from the terminal. Catch it here so
 	// cassette doesn't quit first; it waits for the command and then shuts down.
@@ -219,14 +284,14 @@ func runCommand(command []string, base string) error {
 	return nil
 }
 
-// commandEnv returns environ with the SDK base-URL variables pointing at cassette,
-// replacing any values that were already set.
-func commandEnv(environ []string, base string) []string {
-	env := make([]string, 0, len(environ)+len(baseURLVars))
+// commandEnv returns environ with vars pointing at cassette, replacing any
+// values that were already set.
+func commandEnv(environ []string, base string, vars []envVar) []string {
+	env := make([]string, 0, len(environ)+len(vars))
 	for _, kv := range environ {
 		name, _, _ := strings.Cut(kv, "=")
 		replaced := false
-		for _, v := range baseURLVars {
+		for _, v := range vars {
 			// Windows variable names ignore case, so compare that way everywhere.
 			if strings.EqualFold(name, v.name) {
 				log.Printf("replacing %s for the command (was %s)", v.name, strings.TrimPrefix(kv, name+"="))
@@ -237,8 +302,8 @@ func commandEnv(environ []string, base string) []string {
 			env = append(env, kv)
 		}
 	}
-	for _, v := range baseURLVars {
-		env = append(env, v.name+"="+base+v.suffix)
+	for _, v := range vars {
+		env = append(env, v.name+"="+base+v.path)
 	}
 	return env
 }

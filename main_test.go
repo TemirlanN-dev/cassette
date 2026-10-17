@@ -18,7 +18,8 @@ import (
 // TestHelperCommand isn't a real test. The other tests run this test binary
 // again as their "test command" (instead of something like npm test), with
 // CASSETTE_HELPER=1 set. It sends one request through cassette, like an app
-// using the Anthropic SDK would, then exits with HELPER_EXIT.
+// using the Anthropic SDK would, then exits with HELPER_EXIT. HELPER_URL_VAR
+// makes it read its address from a different variable, like another SDK would.
 func TestHelperCommand(t *testing.T) {
 	if os.Getenv("CASSETTE_HELPER") != "1" {
 		t.Skip("only runs as a child process")
@@ -26,7 +27,11 @@ func TestHelperCommand(t *testing.T) {
 	if marker := os.Getenv("HELPER_MARKER"); marker != "" {
 		os.WriteFile(marker, nil, 0o644) // lets a test check whether the command ran at all
 	}
-	resp, err := http.Post(os.Getenv("ANTHROPIC_BASE_URL")+"/v1/messages", "application/json", strings.NewReader(`{"prompt":"hi"}`))
+	urlVar, path := "ANTHROPIC_BASE_URL", "/v1/messages"
+	if v := os.Getenv("HELPER_URL_VAR"); v != "" {
+		urlVar, path = v, "/messages"
+	}
+	resp, err := http.Post(os.Getenv(urlVar)+path, "application/json", strings.NewReader(`{"prompt":"hi"}`))
 	if err != nil {
 		os.Exit(99)
 	}
@@ -49,6 +54,7 @@ func setFlags(t *testing.T, targetURL string) {
 	target = targetURL
 	cassettePath = filepath.Join(t.TempDir(), "c.json")
 	configPath = filepath.Join(t.TempDir(), "no-config.yaml")
+	envFlags = nil
 	realtime = false
 }
 
@@ -125,7 +131,7 @@ func TestCommandEnvReplacesBaseURLs(t *testing.T) {
 		"PATH=/bin",
 		"anthropic_base_url=https://gateway.example.com", // different case, as Windows allows
 		"OPENAI_BASE_URL=https://old",
-	}, "http://127.0.0.1:5555")
+	}, "http://127.0.0.1:5555", defaultEnvVars)
 
 	want := map[string]bool{
 		"PATH=/bin": true,
@@ -139,5 +145,61 @@ func TestCommandEnvReplacesBaseURLs(t *testing.T) {
 		if !want[kv] {
 			t.Errorf("unexpected %q in %v", kv, env)
 		}
+	}
+}
+
+func TestEnvVarsCombinesDefaultsFileAndFlags(t *testing.T) {
+	vars, err := envVars(
+		map[string]string{"MISTRAL_BASE_URL": "/v1", "GROQ_BASE_URL": "/openai/v1"},
+		[]string{"mistral_base_url=v2", "MY_AI_URL"}, // the flag wins, a missing "/" is added, the path is optional
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, v := range vars {
+		got[strings.ToUpper(v.name)] = v.path
+	}
+	want := map[string]string{
+		"ANTHROPIC_BASE_URL": "",
+		"OPENAI_BASE_URL":    "/v1",
+		"GROQ_BASE_URL":      "/openai/v1",
+		"MISTRAL_BASE_URL":   "/v2",
+		"MY_AI_URL":          "",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("vars = %+v", vars)
+	}
+	for name, path := range want {
+		if p, ok := got[name]; !ok || p != path {
+			t.Errorf("%s = %q (present %v), want %q", name, p, ok, path)
+		}
+	}
+}
+
+func TestEnvVarsRejectsBadNames(t *testing.T) {
+	for _, flag := range []string{"=/v1", "MY VAR=/v1"} {
+		if _, err := envVars(nil, []string{flag}); err == nil {
+			t.Errorf("--env %q should be an error", flag)
+		}
+	}
+}
+
+func TestEnvFlagPointsAnyLibraryAtCassette(t *testing.T) {
+	var gotPath string
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		io.WriteString(w, `{}`)
+	}))
+	defer api.Close()
+	setFlags(t, api.URL)
+	envFlags = []string{"MY_AI_URL=/v1"}
+	t.Setenv("HELPER_URL_VAR", "MY_AI_URL") // the "app" reads its address from MY_AI_URL
+
+	if err := run(proxy.Record, helperCommand(t, 0), false); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if gotPath != "/v1/messages" {
+		t.Errorf("the AI got a request for %q, want /v1/messages", gotPath)
 	}
 }
