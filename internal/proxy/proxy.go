@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/TemirlanN-dev/cassette/internal/cassette"
+	"github.com/TemirlanN-dev/cassette/internal/match"
 	"io"
 	"log"
 	"mime"
@@ -13,9 +15,6 @@ import (
 	"net/url"
 	"sync"
 	"time"
-
-	"github.com/TemirlanN-dev/cassette/internal/cassette"
-	"github.com/TemirlanN-dev/cassette/internal/match"
 )
 
 type Mode int
@@ -44,9 +43,10 @@ type Proxy struct {
 	realtime bool
 	forward  *httputil.ReverseProxy
 
-	mu    sync.Mutex
-	index map[string]cassette.Interaction // fingerprint -> recording
-	used  map[string]bool                 // fingerprints answered or recorded this run
+	mu     sync.Mutex
+	index  map[string]cassette.Interaction // fingerprint -> recording
+	used   map[string]bool                 // fingerprints answered or recorded this run
+	misses int                             // requests Replay mode had no recording for
 }
 
 // ctxKey is used to attach the captured request to the request's context,
@@ -106,6 +106,13 @@ func (p *Proxy) Unused() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return len(p.index) - len(p.used)
+}
+
+// Misses returns how many requests had no recording (Replay mode only).
+func (p *Proxy) Misses() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.misses
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -190,6 +197,9 @@ func (p *Proxy) miss(w http.ResponseWriter, method, path string) {
 	msg := "cassette: no recording for " + method + " " + path + " in " + p.store.Path() +
 		" (run `cassette auto` to record it)"
 	log.Printf("MISS %s %s: not in %s", method, path, p.store.Path())
+	p.mu.Lock()
+	p.misses++
+	p.mu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusNotFound)

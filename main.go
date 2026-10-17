@@ -5,10 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -27,14 +30,20 @@ var (
 	realtime     bool
 )
 
+// exitCodeError makes cassette exit with a specific code, e.g. the test command's.
+type exitCodeError struct{ code int }
+
+func (e exitCodeError) Error() string { return fmt.Sprintf("exit code %d", e.code) }
+
 func main() {
 	root := &cobra.Command{
-		Use:          "cassette",
-		Short:        "Record and replay LLM API calls for fast, free, deterministic tests",
-		SilenceUsage: true,
+		Use:           "cassette",
+		Short:         "Record and replay LLM API calls for fast, free, deterministic tests",
+		SilenceUsage:  true,
+		SilenceErrors: true, // errors are printed below, so a failing test command isn't reported twice
 	}
 	// Persistent flags are inherited by every subcommand.
-	root.PersistentFlags().IntVar(&port, "port", 4000, "port to listen on")
+	root.PersistentFlags().IntVar(&port, "port", 4000, "port to listen on (when running a command, a free port is picked unless you set this)")
 	root.PersistentFlags().StringVar(&target, "target", "", "API to forward requests to, e.g. https://api.anthropic.com (required for record and auto)")
 	root.PersistentFlags().StringVar(&cassettePath, "cassette", "cassettes/default.json", "cassette file to read and write")
 	root.PersistentFlags().StringVar(&configPath, "config", "cassette.yaml", "matching rules file (optional)")
@@ -45,17 +54,36 @@ func main() {
 		newCommand(proxy.Replay, "replay", "Answer only from the cassette; fail on any request that wasn't recorded"),
 	)
 
-	if err := root.Execute(); err != nil {
+	err := root.Execute()
+	var exit exitCodeError
+	switch {
+	case err == nil:
+	case errors.As(err, &exit):
+		os.Exit(exit.code)
+	default:
+		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
 }
 
 func newCommand(mode proxy.Mode, name, short string) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   name,
+		Use:   name + " [-- command args...]",
 		Short: short,
+		Long: short + `.
+
+With a command after --, cassette runs it with ANTHROPIC_BASE_URL and
+OPENAI_BASE_URL pointing at itself, stops when it exits, and exits with
+the command's exit code:
+
+  cassette ` + name + ` --target https://api.anthropic.com -- npm test
+
+Other SDKs need their base URL set to the address cassette prints.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return run(mode)
+			if len(args) > 0 && cmd.ArgsLenAtDash() != 0 {
+				return fmt.Errorf("put the command to run after --, e.g. cassette %s -- npm test", name)
+			}
+			return run(mode, args, cmd.Flags().Changed("port"))
 		},
 	}
 	if mode != proxy.Record {
@@ -64,7 +92,9 @@ func newCommand(mode proxy.Mode, name, short string) *cobra.Command {
 	return cmd
 }
 
-func run(mode proxy.Mode) error {
+// run starts cassette in the given mode. If command is not empty, it runs the
+// command against cassette and stops when it exits; otherwise it runs until Ctrl+C.
+func run(mode proxy.Mode, command []string, portChosen bool) error {
 	cfg, err := match.LoadConfig(configPath)
 	if err != nil {
 		return err
@@ -109,15 +139,108 @@ func run(mode proxy.Mode) error {
 		log.Printf("replaying %d recordings from %s; unknown requests will fail", p.Loaded(), store.Path())
 	}
 
-	if err := serve(p); err != nil {
-		return err
+	// When running a command, cassette sets the base URL for it, so any free
+	// port works. Port 0 asks the operating system to pick one.
+	listenPort := port
+	if len(command) > 0 && !portChosen {
+		listenPort = 0
 	}
+	// 127.0.0.1 means only this machine can connect; the proxy forwards API keys.
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", listenPort))
+	if err != nil {
+		return err // e.g. the port is taken; the command never runs
+	}
+	srv := &http.Server{Handler: p}
+	go srv.Serve(ln)
+	base := "http://" + ln.Addr().String()
+	log.Printf("listening on %s", base)
+
+	var cmdErr error
+	if len(command) > 0 {
+		cmdErr = runCommand(command, base)
+	} else {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		log.Printf("press Ctrl+C to stop")
+		<-ctx.Done()
+		stop()
+	}
+
+	// Let requests that are still running finish (and be saved) before exiting.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	srv.Shutdown(shutdownCtx)
+
 	if mode != proxy.Record {
 		if n := p.Unused(); n > 0 {
 			log.Printf("%d recordings were not used this run", n)
 		}
 	}
+	if cmdErr != nil {
+		return cmdErr
+	}
+	// An app may catch API errors and carry on, so tests can pass even though
+	// the cassette is missing recordings. Fail the run so CI notices.
+	if n := p.Misses(); n > 0 {
+		log.Printf("%d requests had no recording in %s; run `cassette auto` to record them", n, store.Path())
+		return exitCodeError{1}
+	}
 	return nil
+}
+
+// Environment variables the official SDKs read their base URL from.
+var baseURLVars = []struct{ name, suffix string }{
+	{"ANTHROPIC_BASE_URL", ""},
+	{"OPENAI_BASE_URL", "/v1"}, // the OpenAI SDK expects /v1 to be part of the base URL
+}
+
+// runCommand runs the user's command with the SDKs pointed at cassette and
+// returns an exitCodeError if the command fails.
+func runCommand(command []string, base string) error {
+	c := exec.Command(command[0], command[1:]...)
+	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+	c.Env = commandEnv(os.Environ(), base)
+
+	// Ctrl+C reaches the command directly from the terminal. Catch it here so
+	// cassette doesn't quit first; it waits for the command and then shuts down.
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt)
+	defer signal.Stop(sig)
+
+	log.Printf("running: %s", strings.Join(command, " "))
+	err := c.Run()
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		log.Printf("%s exited with code %d", command[0], exitErr.ExitCode())
+		return exitCodeError{exitErr.ExitCode()}
+	}
+	if err != nil {
+		return fmt.Errorf("running %s: %w", command[0], err)
+	}
+	return nil
+}
+
+// commandEnv returns environ with the SDK base-URL variables pointing at cassette,
+// replacing any values that were already set.
+func commandEnv(environ []string, base string) []string {
+	env := make([]string, 0, len(environ)+len(baseURLVars))
+	for _, kv := range environ {
+		name, _, _ := strings.Cut(kv, "=")
+		replaced := false
+		for _, v := range baseURLVars {
+			// Windows variable names ignore case, so compare that way everywhere.
+			if strings.EqualFold(name, v.name) {
+				log.Printf("replacing %s for the command (was %s)", v.name, strings.TrimPrefix(kv, name+"="))
+				replaced = true
+			}
+		}
+		if !replaced {
+			env = append(env, kv)
+		}
+	}
+	for _, v := range baseURLVars {
+		env = append(env, v.name+"="+base+v.suffix)
+	}
+	return env
 }
 
 func parseTarget(s string) (*url.URL, error) {
@@ -129,30 +252,4 @@ func parseTarget(s string) (*url.URL, error) {
 		return nil, fmt.Errorf("invalid --target %q, expected something like https://api.anthropic.com", s)
 	}
 	return u, nil
-}
-
-// serve runs the server until Ctrl+C, then lets in-flight requests finish.
-func serve(handler http.Handler) error {
-	// 127.0.0.1 means only this machine can connect; the proxy forwards API keys.
-	srv := &http.Server{Addr: fmt.Sprintf("127.0.0.1:%d", port), Handler: handler}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-
-	errc := make(chan error, 1)
-	go func() { errc <- srv.ListenAndServe() }()
-	log.Printf("listening on http://%s (Ctrl+C to stop)", srv.Addr)
-
-	select {
-	case err := <-errc: // could not start, e.g. the port is taken
-		return err
-	case <-ctx.Done():
-	}
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
-	}
-	return nil
 }
