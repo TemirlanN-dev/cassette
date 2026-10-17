@@ -1,0 +1,6 @@
+# Editor settings are personal
+.vscode/
+
+# Built program (from `go build`)
+/cassette
+/cassette.exe
