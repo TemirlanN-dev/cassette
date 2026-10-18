@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime/debug"
 	"sort"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"github.com/TemirlanN-dev/cassette/internal/config"
 	"github.com/TemirlanN-dev/cassette/internal/match"
 	"github.com/TemirlanN-dev/cassette/internal/proxy"
+	"github.com/TemirlanN-dev/cassette/internal/report"
 )
 
 // Flags shared by every command.
@@ -65,7 +67,7 @@ func main() {
 	// Persistent flags are inherited by every subcommand.
 	root.PersistentFlags().IntVar(&port, "port", 4000, "port to listen on (when running a command, a free port is picked unless you set this)")
 	root.PersistentFlags().StringVar(&target, "target", "", "API to forward requests to, e.g. https://api.anthropic.com (required for record and auto)")
-	root.PersistentFlags().StringVar(&cassettePath, "cassette", "cassettes/default.json", "cassette file to read and write")
+	root.PersistentFlags().StringVar(&cassettePath, "cassette", "cassettes/default.jsonl", "cassette file to read and write")
 	root.PersistentFlags().StringVar(&configPath, "config", "cassette.yaml", "settings file (optional)")
 	root.PersistentFlags().StringArrayVar(&envFlags, "env", nil, "also point this environment variable at cassette for the command, e.g. --env MISTRAL_BASE_URL=/v1 (repeatable)")
 
@@ -73,6 +75,8 @@ func main() {
 		newCommand(proxy.Record, "record", "Forward every request to the real API and save the answers to a fresh cassette"),
 		newCommand(proxy.Auto, "auto", "Answer known requests from the cassette and record unknown ones"),
 		newCommand(proxy.Replay, "replay", "Answer only from the cassette; fail on any request that wasn't recorded"),
+		newShowCommand(),
+		newDiffCommand(),
 	)
 
 	err := root.Execute()
@@ -116,6 +120,107 @@ address from, plus the path to keep:
 	return cmd
 }
 
+func newShowCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "show FILE",
+		Short: "Print a cassette in readable form",
+		Long: `Print a cassette in readable form: each request, and the answer and
+tool calls in its response.
+
+Git can use this to show readable diffs of cassette files. Run once per repo:
+
+  git config diff.cassette.textconv "cassette show"
+
+and add this line to .gitattributes:
+
+  cassettes/*.jsonl diff=cassette`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := cassette.Load(args[0])
+			if err != nil {
+				return err
+			}
+			report.Show(os.Stdout, c)
+			return nil
+		},
+	}
+}
+
+func newDiffCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "diff [OLD NEW]",
+		Short: "Show how the recordings changed: answers, tool calls and requests",
+		Long: `Show how the recordings changed: answers, tool calls and requests.
+
+With no arguments, compares the cassette with its last committed version in
+Git. With two files, compares them. Exits with code 1 if anything changed.`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 0 && len(args) != 2 {
+				return fmt.Errorf("give no files (compare with Git) or two files (OLD NEW)")
+			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDiff(args)
+		},
+	}
+}
+
+func runDiff(args []string) error {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return err
+	}
+	matcher, err := match.New(cfg.Match)
+	if err != nil {
+		return fmt.Errorf("%s: %w", configPath, err)
+	}
+
+	var before, after *cassette.Cassette
+	if len(args) == 2 {
+		if before, err = cassette.Load(args[0]); err != nil {
+			return err
+		}
+		if after, err = cassette.Load(args[1]); err != nil {
+			return err
+		}
+	} else {
+		if after, err = cassette.Load(cassettePath); err != nil {
+			return err
+		}
+		if before, err = committedVersion(cassettePath); err != nil {
+			return err
+		}
+	}
+
+	res := report.Diff(os.Stdout, before.Interactions, after.Interactions, matcher)
+	if res.Any() {
+		return exitCodeError{1}
+	}
+	return nil
+}
+
+// committedVersion reads the version of path in the last Git commit. A file
+// that was never committed counts as empty, so everything in it shows as new.
+func committedVersion(path string) (*cassette.Cassette, error) {
+	// Run Git from the file's own folder; "HEAD:./name" then means "name, in
+	// this folder", so we never have to work out the path from the repo root.
+	git := func(args ...string) ([]byte, error) {
+		c := exec.Command("git", args...)
+		c.Dir = filepath.Dir(path)
+		return c.Output()
+	}
+	if _, err := git("rev-parse", "--git-dir"); err != nil {
+		return nil, fmt.Errorf("not in a Git repository; to compare two files, run: cassette diff OLD NEW")
+	}
+	data, err := git("show", "HEAD:./"+filepath.Base(path))
+	if err != nil {
+		log.Printf("%s isn't in the last commit yet, so everything in it counts as new", path)
+		return &cassette.Cassette{}, nil
+	}
+	return cassette.Parse(data)
+}
+
 // run starts cassette in the given mode. If command is not empty, it runs the
 // command against cassette and stops when it exits; otherwise it runs until Ctrl+C.
 func run(mode proxy.Mode, command []string, portChosen bool) error {
@@ -157,6 +262,12 @@ func run(mode proxy.Mode, command []string, portChosen bool) error {
 	}
 	if err != nil {
 		return err
+	}
+	if old := store.MigratedFrom(); old != "" {
+		if err := store.Save(); err != nil {
+			return err
+		}
+		log.Printf("converted %s to the new format in %s; you can delete %s", old, store.Path(), old)
 	}
 
 	p := proxy.New(proxy.Options{Mode: mode, Target: targetURL, Store: store, Matcher: matcher, Realtime: realtime})

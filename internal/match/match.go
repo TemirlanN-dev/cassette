@@ -82,12 +82,12 @@ func New(cfg Config) (*Matcher, error) {
 func (m *Matcher) Fingerprint(method, path string, body []byte) string {
 	h := sha256.New()
 	fmt.Fprintf(h, "%s\n%s\n", method, path)
-	h.Write(m.normalize(body))
+	h.Write(m.Normalize(body))
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// normalize returns the body with the rules applied, in a canonical form.
-func (m *Matcher) normalize(body []byte) []byte {
+// Normalize returns the body with the rules applied, in a canonical form.
+func (m *Matcher) Normalize(body []byte) []byte {
 	var v any
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.UseNumber() // keep numbers exactly as written instead of converting to float

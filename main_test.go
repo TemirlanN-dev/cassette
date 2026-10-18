@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -16,6 +17,90 @@ import (
 	"github.com/TemirlanN-dev/cassette/internal/cassette"
 	"github.com/TemirlanN-dev/cassette/internal/proxy"
 )
+
+func answer(text string) cassette.Interaction {
+	return cassette.Interaction{
+		Request: cassette.Request{Method: "POST", Path: "/v1/messages", Body: cassette.EncodeBody([]byte(`{"q":1}`))},
+		Response: cassette.Response{Status: 200, Headers: http.Header{"Content-Type": {"application/json"}},
+			Chunks: []cassette.Chunk{{Data: `{"type":"message","content":[{"type":"text","text":"` + text + `"}]}`}}},
+	}
+}
+
+func writeCassette(t *testing.T, path string, recs ...cassette.Interaction) {
+	t.Helper()
+	s := cassette.NewStore(path)
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range recs {
+		s.Add(r)
+	}
+}
+
+func TestDiffTwoFiles(t *testing.T) {
+	setFlags(t, "")
+	dir := t.TempDir()
+	a, b := filepath.Join(dir, "a.jsonl"), filepath.Join(dir, "b.jsonl")
+	writeCassette(t, a, answer("Hello"))
+	writeCassette(t, b, answer("Hello"))
+	if err := runDiff([]string{a, b}); err != nil {
+		t.Errorf("identical files: %v, want no error (exit code 0)", err)
+	}
+
+	writeCassette(t, b, answer("Goodbye"))
+	if got := exitCode(runDiff([]string{a, b})); got != 1 {
+		t.Errorf("exit code = %d, want 1 when something changed", got)
+	}
+}
+
+func TestDiffAgainstLastCommit(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	setFlags(t, "")
+	dir := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		c := exec.Command("git", append([]string{"-c", "user.name=test", "-c", "user.email=test@example.com"}, args...)...)
+		c.Dir = dir
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-q")
+	cassettePath = filepath.Join(dir, "cassettes", "default.jsonl")
+	writeCassette(t, cassettePath, answer("Hello"))
+	git("add", ".")
+	git("commit", "-q", "-m", "record")
+
+	if err := runDiff(nil); err != nil {
+		t.Errorf("right after committing: %v, want no changes", err)
+	}
+	writeCassette(t, cassettePath, answer("Hello"), answer("Extra"))
+	if got := exitCode(runDiff(nil)); got != 1 {
+		t.Errorf("exit code = %d, want 1 after re-recording", got)
+	}
+}
+
+func TestOldDefaultFileIsConverted(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{}`)
+	}))
+	defer api.Close()
+	setFlags(t, api.URL)
+	dir := t.TempDir()
+	old := filepath.Join(dir, "default.json")
+	os.WriteFile(old, []byte(`{"version":1,"interactions":[{"request":{"method":"GET","path":"/old"},"response":{"status":200,"chunks":[]}}]}`), 0o644)
+	cassettePath = filepath.Join(dir, "default.jsonl")
+
+	if err := run(proxy.Auto, helperCommand(t, 0), false); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	c, err := cassette.Load(cassettePath)
+	if err != nil || len(c.Interactions) != 2 {
+		t.Errorf("new file should hold the old recording plus the new one: %v, %+v", err, c)
+	}
+}
 
 // TestHelperCommand isn't a real test. The other tests run this test binary
 // again as their "test command" (instead of something like npm test), with

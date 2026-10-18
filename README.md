@@ -88,7 +88,7 @@ npm run test:record
 npm test
 ```
 
-That's it. Your recordings live in `cassettes/default.json`. Commit that file, and everyone on your team (and your CI) gets fast, free tests too.
+That's it. Your recordings live in `cassettes/default.jsonl`. Commit that file, and everyone on your team (and your CI) gets fast, free tests too.
 
 > **Not using npm?** The same idea works with any test command, like `cassette replay -- pytest` or `cassette replay -- go test ./...`.
 
@@ -209,8 +209,44 @@ cassette replay --realtime -- npm test
 
 ## Safe to commit
 
-Recordings are made to live in git, so cassette **never saves your API keys**. Keys in headers and in the address are removed before anything is written.
-Recordings are plain, readable JSON, so when an AI answer changes you'll see exactly what changed in your pull request.
+Recordings are made to live in git, so cassette **never saves your API keys** (or your account IDs). They're removed before anything is written.
+
+## See what changed
+
+Edited a prompt and re-recorded? Ask cassette what's different:
+
+```sh
+cassette diff
+```
+
+```
+~ POST /v1/messages   request changed (probably the same call with an edited prompt)
+    request:
+      messages.0.content: "Find cat facts" → "Tell me a cat fact"
+    answer:      "Let me search."
+             →   "Cats sleep 13 hours a day."
+    tool calls:  search_web({"q":"cat facts"})
+             →   (none)
+
+1 changed, 0 added, 0 removed, 1 unchanged
+```
+
+It compares your recordings with your last commit and understands answers and tool calls from **Anthropic, OpenAI and Gemini**. Things that change on every recording, like message IDs, don't count as changes.
+Want to compare any two files instead? `cassette diff old.jsonl new.jsonl`.
+
+**Readable diffs in Git, too.** Cassette files store one recording per line, which keeps saving fast and simple, but makes raw diffs hard to read. Tell Git to show them through cassette, once per repo:
+
+```sh
+git config diff.cassette.textconv "cassette show"
+```
+
+And add this line to your `.gitattributes` file:
+
+```
+cassettes/*.jsonl diff=cassette
+```
+
+Now `git diff` and VS Code show the requests, answers and tool calls instead of long lines of JSON. (GitHub's website still shows the raw lines, so run `cassette diff` when reviewing a pull request.)
 
 ## Use it in CI
 
@@ -230,9 +266,11 @@ If a test sends a request that isn't recorded, the build fails and tells you whi
 
 ```
 cassette <record | auto | replay> [options] [-- your test command]
+cassette diff [OLD NEW]     show what changed in your recordings
+cassette show FILE          print a cassette in readable form
 
   --target URL     the real AI service to record from (needed for record and auto)
-  --cassette FILE  where recordings are saved (default: cassettes/default.json)
+  --cassette FILE  where recordings are saved (default: cassettes/default.jsonl)
   --config FILE    your settings file (default: cassette.yaml, optional)
   --env NAME=PATH  also point this environment variable at cassette (repeatable)
   --port NUMBER    which port to listen on (default: a free one when running a command, else 4000)
@@ -252,7 +290,6 @@ cassette works with any AI service that answers ordinary web requests. A few thi
 ## Coming soon
 
 - 🧪 **Jest, Vitest and pytest helpers:** cassette starts by itself when your tests do, with a separate recording for each test
-- 🔍 **Diff mode:** change a prompt and see how the AI's behavior changed, step by step
 - 💰 **Cost report:** how many tokens and dollars each test would have cost
 
 ## Contributing
