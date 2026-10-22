@@ -59,12 +59,12 @@ go install github.com/TemirlanN-dev/cassette@latest
 
 ```json
 "scripts": {
-  "test": "cassette replay -- jest",
-  "test:record": "cassette auto --target <your AI service> -- jest"
+  "test": "cassette replay -- <your test command>",
+  "test:record": "cassette auto --target <your AI service> -- <your test command>"
 }
 ```
 
-Swap `jest` for whatever runs your tests, and `<your AI service>` for its address:
+Swap `<your test command>` for whatever runs your tests (like `jest` or `vitest run`), and `<your AI service>` for its address:
 
 | AI service | Address |
 |---|---|
@@ -257,7 +257,7 @@ Because `replay` never calls the AI, your CI doesn't need an API key at all. Her
   with:
     go-version: stable
 - run: go install github.com/TemirlanN-dev/cassette@latest
-- run: npm test    # runs "cassette replay -- jest" from your package.json
+- run: npm test    # runs "cassette replay -- <your test command>" from your package.json
 ```
 
 If a test sends a request that isn't recorded, the build fails and tells you which one.
