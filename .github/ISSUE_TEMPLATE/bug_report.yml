@@ -1,0 +1,73 @@
+name: Bug report
+description: Something isn't working the way it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug!
+
+        **Please never paste a real API key**, and check any cassette file or log before sharing it.
+        If the problem is a key or account detail leaking, report it privately through the [Security tab](https://github.com/TemirlanN-dev/cassette/security) instead.
+
+  - type: input
+    id: version
+    attributes:
+      label: cassette version
+      description: The output of `cassette --version`
+      placeholder: cassette version 0.2.0
+    validations:
+      required: true
+
+  - type: input
+    id: command
+    attributes:
+      label: Command you ran
+      placeholder: cassette replay -- npm test
+    validations:
+      required: true
+
+  - type: dropdown
+    id: service
+    attributes:
+      label: AI service
+      options:
+        - Anthropic
+        - OpenAI
+        - Gemini
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: library
+    attributes:
+      label: AI library and version
+      description: The library your app uses to talk to the AI service
+      placeholder: "@anthropic-ai/sdk 0.135.0"
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you expected, and what happened instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: cassette's output
+      description: What cassette printed. Remove anything private first.
+      render: text

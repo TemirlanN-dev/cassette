@@ -1,0 +1,25 @@
+name: Feature idea
+description: Suggest something cassette could do better
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe what you're trying to do, and what gets in the way today.
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like cassette to do?
+      description: A rough idea is fine. An example command or output helps a lot.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Anything you've tried instead?
+      description: Workarounds or other tools you've used, if any.
